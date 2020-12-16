@@ -72,6 +72,10 @@ GNUstep port and post-20 update by Adrian Robert (arobert@cogsci.ucsd.edu)
 #include <Carbon/Carbon.h>
 #endif
 
+#ifdef NS_DRAW_TO_BUFFER
+#include <IOSurface/IOSurface.h>
+#endif
+
 static EmacsMenu *dockMenu;
 #ifdef NS_IMPL_COCOA
 static EmacsMenu *mainMenu;
@@ -1147,7 +1151,7 @@ ns_update_end (struct frame *f)
   if ([FRAME_NS_VIEW (f) wantsUpdateLayer])
     {
 #endif
-      [NSGraphicsContext setCurrentContext:nil];
+      [FRAME_NS_VIEW (f) unfocusDrawingBuffer];
 #if MAC_OS_X_VERSION_MIN_REQUIRED < 101400
     }
   else
@@ -1255,6 +1259,8 @@ ns_unfocus (struct frame *f)
   if ([FRAME_NS_VIEW (f) wantsUpdateLayer])
     {
 #endif
+      if (! ns_updating_frame)
+        [FRAME_NS_VIEW (f) unfocusDrawingBuffer];
       [FRAME_NS_VIEW (f) setNeedsDisplay:YES];
 #if MAC_OS_X_VERSION_MIN_REQUIRED < 101400
     }
@@ -3386,6 +3392,8 @@ ns_draw_window_cursor (struct window *w, struct glyph_row *glyph_row,
   /* Prevent the cursor from being drawn outside the text area.  */
   r = NSIntersectionRect (r, ns_row_rect (w, glyph_row, TEXT_AREA));
 
+  ns_focus (f, &r, 1);
+
   face = FACE_FROM_ID_OR_NULL (f, phys_cursor_glyph->face_id);
   if (face && NS_FACE_BACKGROUND (face)
       == ns_index_color (FRAME_CURSOR_COLOR (f), f))
@@ -3395,8 +3403,6 @@ ns_draw_window_cursor (struct window *w, struct glyph_row *glyph_row,
     }
   else
     [FRAME_CURSOR_COLOR (f) set];
-
-  ns_focus (f, &r, 1);
 
   switch (cursor_type)
     {
@@ -6267,6 +6273,7 @@ not_in_argv (NSString *arg)
 
 #ifdef NS_DRAW_TO_BUFFER
   CGContextRelease (drawingBuffer);
+  CFRelease (surface);
 #endif
 
   [toolbar release];
@@ -8324,29 +8331,65 @@ not_in_argv (NSString *arg)
   CGColorSpaceRef colorSpace = [[[self window] colorSpace] CGColorSpace];
   CGFloat scale = [[self window] backingScaleFactor];
   NSRect frame = [self frame];
+  int width, height, bytesPerRow;
 
   if (drawingBuffer != nil)
-    CGContextRelease (drawingBuffer);
+    {
+      CGContextRelease (drawingBuffer);
+      CFRelease (surface);
+    }
 
-  drawingBuffer = CGBitmapContextCreate (nil, NSWidth (frame) * scale, NSHeight (frame) * scale,
-                                         8, 0, colorSpace,
-                                         kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Host);
+  width = NSWidth (frame) * scale;
+  height = NSHeight (frame) * scale;
+  bytesPerRow = IOSurfaceAlignProperty (kIOSurfaceBytesPerRow, width * 4);
+
+  surface = IOSurfaceCreate
+    ((CFDictionaryRef)@{(id)kIOSurfaceWidth:[NSNumber numberWithInt:width],
+        (id)kIOSurfaceHeight:[NSNumber numberWithInt:height],
+        (id)kIOSurfaceBytesPerRow:[NSNumber numberWithInt:bytesPerRow],
+        (id)kIOSurfaceBytesPerElement:[NSNumber numberWithInt:4],
+        (id)kIOSurfacePixelFormat:[NSNumber numberWithInt:kCVPixelFormatType_32RGBA]});
+
+  drawingBuffer = CGBitmapContextCreate (IOSurfaceGetBaseAddress (surface),
+                                         IOSurfaceGetWidth (surface),
+                                         IOSurfaceGetHeight (surface),
+                                         8,
+                                         IOSurfaceGetBytesPerRow (surface),
+                                         colorSpace,
+                                         IOSurfaceGetPixelFormat (surface));
 
   /* This fixes the scale to match the backing scale factor, and flips the image.  */
-  CGContextTranslateCTM(drawingBuffer, 0, NSHeight (frame) * scale);
+  CGContextTranslateCTM(drawingBuffer, 0, IOSurfaceGetHeight (surface));
   CGContextScaleCTM(drawingBuffer, scale, -scale);
 }
 
 
 - (void)focusOnDrawingBuffer
 {
-  NSTRACE ("EmacsView focusOnDrawingBuffer]");
+  IOReturn lockStatus;
+
+  NSTRACE ("[EmacsView focusOnDrawingBuffer]");
+
+  if ((lockStatus = IOSurfaceLock (surface, 0, nil)) != kIOReturnSuccess)
+    NSLog (@"Failed to lock surface: %x", lockStatus);
 
   NSGraphicsContext *buf =
     [NSGraphicsContext
         graphicsContextWithCGContext:drawingBuffer flipped:YES];
 
   [NSGraphicsContext setCurrentContext:buf];
+}
+
+
+- (void)unfocusDrawingBuffer
+{
+  IOReturn lockStatus;
+
+  NSTRACE ("[EmacsView unfocusDrawingBuffer]");
+
+  [NSGraphicsContext setCurrentContext:nil];
+  if ((lockStatus = IOSurfaceUnlock (surface, 0, nil)) != kIOReturnSuccess)
+    NSLog (@"Failed to unlock surface: %x", lockStatus);
 }
 
 
@@ -8442,11 +8485,12 @@ not_in_argv (NSString *arg)
 
 - (void)updateLayer
 {
+  CALayer *layer = [self layer];
+
   NSTRACE ("[EmacsView updateLayer]");
 
-  CGImageRef contentsImage = CGBitmapContextCreateImage(drawingBuffer);
-  [[self layer] setContents:(id)contentsImage];
-  CGImageRelease(contentsImage);
+  [layer setContents:(id)surface];
+  [layer setContentsChanged];
 }
 #endif
 

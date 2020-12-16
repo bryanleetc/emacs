@@ -435,6 +435,7 @@ typedef id instancetype;
    BOOL fs_is_native;
    BOOL in_fullscreen_transition;
 #ifdef NS_DRAW_TO_BUFFER
+   IOSurfaceRef surface;
    CGContextRef drawingBuffer;
 #endif
 @public
@@ -478,6 +479,7 @@ typedef id instancetype;
 
 #ifdef NS_DRAW_TO_BUFFER
 - (void)focusOnDrawingBuffer;
+- (void)unfocusDrawingBuffer;
 - (void)createDrawingBuffer;
 #endif
 - (void)copyRect:(NSRect)srcRect to:(NSRect)dstRect;
@@ -720,6 +722,17 @@ extern EmacsMenu *svcsMenu;
 #if defined (NS_IMPL_COCOA)
 @interface NSApplication (EmacsApp)
 - (void)setAppleMenu: (NSMenu *)menu;
+@end
+#endif
+
+/* This is a private API, but it seems we need it to force the CALayer
+   to recognise that the IOSurface has been updated.
+
+   I believe using it will prevent Emacs from ever making it into the
+   Apple App Store.  😎 */
+#ifdef NS_DRAW_TO_BUFFER
+@interface CALayer (Private)
+- (void)setContentsChanged;
 @end
 #endif
 
