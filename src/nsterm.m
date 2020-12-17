@@ -8420,32 +8420,26 @@ not_in_argv (NSString *arg)
   if ([self wantsUpdateLayer])
     {
 #endif
-      CGImageRef copy;
-      NSRect frame = [self frame];
-      NSAffineTransform *setOrigin = [NSAffineTransform transform];
+      double scale = [[self window] backingScaleFactor];
+      int bpe = IOSurfaceGetBytesPerElement (surface);
+      void *pixels = IOSurfaceGetBaseAddress (surface);
+      int rowSize = IOSurfaceGetBytesPerRow (surface);
+      int srcRowSize = NSWidth (srcRect) * scale * bpe;
+      void *srcPixels = pixels + (int)(NSMinY (srcRect) * scale * rowSize + NSMinX (srcRect) * scale * bpe);
+      void *dstPixels = pixels + (int)(NSMinY (dstRect) * scale * rowSize + NSMinX (dstRect) * scale * bpe);
 
-      [[NSGraphicsContext currentContext] saveGraphicsState];
+      if (NSIntersectsRect (srcRect, dstRect)
+          && NSMinY (srcRect) < NSMinY (dstRect))
+        for (int y = NSHeight (srcRect) * scale - 1 ; y >= 0 ; y--)
+          memmove (dstPixels + y * rowSize,
+                   srcPixels + y * rowSize,
+                   srcRowSize);
+      else
+        for (int y = 0 ; y < NSHeight (srcRect) * scale ; y++)
+          memmove (dstPixels + y * rowSize,
+                   srcPixels + y * rowSize,
+                   srcRowSize);
 
-      /* Set the clipping before messing with the buffer's
-         orientation.  */
-      NSRectClip (dstRect);
-
-      /* Unflip the buffer as the copied image will be unflipped, and
-         offset the top left so when we draw back into the buffer the
-         correct part of the image is drawn.  */
-      CGContextScaleCTM(drawingBuffer, 1, -1);
-      CGContextTranslateCTM(drawingBuffer,
-                            NSMinX (dstRect) - NSMinX (srcRect),
-                            -NSHeight (frame) - (NSMinY (dstRect) - NSMinY (srcRect)));
-
-      /* Take a copy of the buffer and then draw it back to the buffer,
-         limited by the clipping rectangle.  */
-      copy = CGBitmapContextCreateImage (drawingBuffer);
-      CGContextDrawImage (drawingBuffer, frame, copy);
-
-      CGImageRelease (copy);
-
-      [[NSGraphicsContext currentContext] restoreGraphicsState];
       [self setNeedsDisplayInRect:dstRect];
 
 #if MAC_OS_X_VERSION_MIN_REQUIRED < 101400
