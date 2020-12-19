@@ -6272,8 +6272,7 @@ not_in_argv (NSString *arg)
             object:nil];
 
 #ifdef NS_DRAW_TO_BUFFER
-  CGContextRelease (drawingBuffer);
-  CFRelease (surface);
+  [surface release];
 #endif
 
   [toolbar release];
@@ -7296,8 +7295,9 @@ not_in_argv (NSString *arg)
   if ([self wantsUpdateLayer])
     {
       CGFloat scale = [[self window] backingScaleFactor];
-      int oldw = (CGFloat)CGBitmapContextGetWidth (drawingBuffer) / scale;
-      int oldh = (CGFloat)CGBitmapContextGetHeight (drawingBuffer) / scale;
+      NSSize size = [surface getSize];
+      int oldw = size.width / scale;
+      int oldh = size.height / scale;
 
       NSTRACE_SIZE ("Original size", NSMakeSize (oldw, oldh));
 
@@ -7307,6 +7307,9 @@ not_in_argv (NSString *arg)
           NSTRACE_MSG ("No change");
           return;
         }
+
+      [surface release];
+      surface = nil;
     }
 #endif
 
@@ -7319,9 +7322,6 @@ not_in_argv (NSString *arg)
                      FRAME_PIXEL_TO_TEXT_HEIGHT (emacsframe, newh),
                      0, YES, 0, 1);
 
-#ifdef NS_DRAW_TO_BUFFER
-  [self createDrawingBuffer];
-#endif
   SET_FRAME_GARBAGED (emacsframe);
   cancel_mouse_face (emacsframe);
 }
@@ -7591,10 +7591,6 @@ not_in_argv (NSString *arg)
 #endif
   [NSApp registerServicesMenuSendTypes: ns_send_types
                            returnTypes: [NSArray array]];
-
-#ifdef NS_DRAW_TO_BUFFER
-  [self createDrawingBuffer];
-#endif
 
   /* Set up view resize notifications.  */
   [self setPostsFrameChangedNotifications:YES];
@@ -8315,81 +8311,41 @@ not_in_argv (NSString *arg)
 
 
 #ifdef NS_DRAW_TO_BUFFER
-- (void)createDrawingBuffer
-  /* Create and store a new CGGraphicsContext for Emacs to draw into.
-
-     We can't do this in GNUstep as there's no equivalent, so under
-     GNUstep we retain the old method of drawing direct to the
-     EmacsView.  */
-{
-  NSTRACE ("EmacsView createDrawingBuffer]");
-
-  if (! [self wantsUpdateLayer])
-    return;
-
-  NSGraphicsContext *screen;
-  CGColorSpaceRef colorSpace = [[[self window] colorSpace] CGColorSpace];
-  CGFloat scale = [[self window] backingScaleFactor];
-  NSRect frame = [self frame];
-  int width, height, bytesPerRow;
-
-  if (drawingBuffer != nil)
-    {
-      CGContextRelease (drawingBuffer);
-      CFRelease (surface);
-    }
-
-  width = NSWidth (frame) * scale;
-  height = NSHeight (frame) * scale;
-  bytesPerRow = IOSurfaceAlignProperty (kIOSurfaceBytesPerRow, width * 4);
-
-  surface = IOSurfaceCreate
-    ((CFDictionaryRef)@{(id)kIOSurfaceWidth:[NSNumber numberWithInt:width],
-        (id)kIOSurfaceHeight:[NSNumber numberWithInt:height],
-        (id)kIOSurfaceBytesPerRow:[NSNumber numberWithInt:bytesPerRow],
-        (id)kIOSurfaceBytesPerElement:[NSNumber numberWithInt:4],
-        (id)kIOSurfacePixelFormat:[NSNumber numberWithInt:kCVPixelFormatType_32RGBA]});
-
-  drawingBuffer = CGBitmapContextCreate (IOSurfaceGetBaseAddress (surface),
-                                         IOSurfaceGetWidth (surface),
-                                         IOSurfaceGetHeight (surface),
-                                         8,
-                                         IOSurfaceGetBytesPerRow (surface),
-                                         colorSpace,
-                                         IOSurfaceGetPixelFormat (surface));
-
-  /* This fixes the scale to match the backing scale factor, and flips the image.  */
-  CGContextTranslateCTM(drawingBuffer, 0, IOSurfaceGetHeight (surface));
-  CGContextScaleCTM(drawingBuffer, scale, -scale);
-}
-
-
 - (void)focusOnDrawingBuffer
 {
-  IOReturn lockStatus;
+  CGFloat scale = [[self window] backingScaleFactor];
 
   NSTRACE ("[EmacsView focusOnDrawingBuffer]");
 
-  if ((lockStatus = IOSurfaceLock (surface, 0, nil)) != kIOReturnSuccess)
-    NSLog (@"Failed to lock surface: %x", lockStatus);
+  if (! surface)
+    {
+      NSRect frame = [self frame];
+      NSSize s = NSMakeSize (NSWidth (frame) * scale, NSHeight (frame) * scale);
 
-  NSGraphicsContext *buf =
-    [NSGraphicsContext
-        graphicsContextWithCGContext:drawingBuffer flipped:YES];
+      surface = [[EmacsSurface alloc] initWithSize:s
+                                        ColorSpace:[[[self window] colorSpace]
+                                                     CGColorSpace]];
+    }
 
-  [NSGraphicsContext setCurrentContext:buf];
+  CGContextRef context = [surface getContext];
+
+  CGContextTranslateCTM(context, 0, [surface getSize].height);
+  CGContextScaleCTM(context, scale, -scale);
+
+  [NSGraphicsContext
+    setCurrentContext:[NSGraphicsContext
+                        graphicsContextWithCGContext:context
+                                             flipped:YES]];
 }
 
 
 - (void)unfocusDrawingBuffer
 {
-  IOReturn lockStatus;
-
   NSTRACE ("[EmacsView unfocusDrawingBuffer]");
 
   [NSGraphicsContext setCurrentContext:nil];
-  if ((lockStatus = IOSurfaceUnlock (surface, 0, nil)) != kIOReturnSuccess)
-    NSLog (@"Failed to unlock surface: %x", lockStatus);
+  [surface releaseContext];
+  [self setNeedsDisplay:YES];
 }
 
 
@@ -8398,11 +8354,11 @@ not_in_argv (NSString *arg)
 {
   NSTRACE ("EmacsView windowDidChangeBackingProperties:]");
 
-  if (! [self wantsUpdateLayer])
-    return;
-
   NSRect frame = [self frame];
-  [self createDrawingBuffer];
+
+  [surface release];
+  surface = nil;
+
   ns_clear_frame (emacsframe);
   expose_frame (emacsframe, 0, 0, NSWidth (frame), NSHeight (frame));
 }
@@ -8421,12 +8377,15 @@ not_in_argv (NSString *arg)
     {
 #endif
       double scale = [[self window] backingScaleFactor];
-      int bpe = IOSurfaceGetBytesPerElement (surface);
-      void *pixels = IOSurfaceGetBaseAddress (surface);
-      int rowSize = IOSurfaceGetBytesPerRow (surface);
-      int srcRowSize = NSWidth (srcRect) * scale * bpe;
-      void *srcPixels = pixels + (int)(NSMinY (srcRect) * scale * rowSize + NSMinX (srcRect) * scale * bpe);
-      void *dstPixels = pixels + (int)(NSMinY (dstRect) * scale * rowSize + NSMinX (dstRect) * scale * bpe);
+      CGContextRef context = [[NSGraphicsContext currentContext] CGContext];
+      int bpp = CGBitmapContextGetBitsPerPixel (context) / 8;
+      void *pixels = CGBitmapContextGetData (context);
+      int rowSize = CGBitmapContextGetBytesPerRow (context);
+      int srcRowSize = NSWidth (srcRect) * scale * bpp;
+      void *srcPixels = pixels + (int)(NSMinY (srcRect) * scale * rowSize
+                                       + NSMinX (srcRect) * scale * bpp);
+      void *dstPixels = pixels + (int)(NSMinY (dstRect) * scale * rowSize
+                                       + NSMinX (dstRect) * scale * bpp);
 
       if (NSIntersectsRect (srcRect, dstRect)
           && NSMinY (srcRect) < NSMinY (dstRect))
@@ -8439,8 +8398,6 @@ not_in_argv (NSString *arg)
           memmove (dstPixels + y * rowSize,
                    srcPixels + y * rowSize,
                    srcRowSize);
-
-      [self setNeedsDisplayInRect:dstRect];
 
 #if MAC_OS_X_VERSION_MIN_REQUIRED < 101400
     }
@@ -8479,12 +8436,14 @@ not_in_argv (NSString *arg)
 
 - (void)updateLayer
 {
-  CALayer *layer = [self layer];
-
   NSTRACE ("[EmacsView updateLayer]");
 
-  [layer setContents:(id)surface];
-  [layer setContentsChanged];
+  /* This can fail to update the screen if the same surface is
+     provided twice in a row, even if its contents have changed.
+     There's a private method, -[CALayer setContentsChanged], that we
+     could use to force it, but we shouldn't often get the same
+     surface twice in a row.  */
+  [[self layer] setContents:(id)[surface getSurface]];
 }
 #endif
 
@@ -9525,6 +9484,207 @@ not_in_argv (NSString *arg)
 }
 
 @end  /* EmacsScroller */
+
+
+#ifdef NS_DRAW_TO_BUFFER
+
+/* ==========================================================================
+
+   A class to handle the screen buffer.
+
+   ========================================================================== */
+
+@implementation EmacsSurface
+
+
+/* An IOSurface is a pixel buffer that is efficiently copied to VRAM
+   for display.  In order to use an IOSurface we must first lock it,
+   write to it, then unlock it.  At this point it is transferred to
+   VRAM and if we modify it during this transfer we may see corruption
+   of the output.  To avoid this problem we can check if the surface
+   is "in use", and if it is then avoid using it.  Unfortunately to
+   avoid writing to a surface that's in use, but still maintain the
+   ability to draw to the screen at any time, we need to keep a cache
+   of multiple surfaces that we can use at will.
+
+   The EmacsSurface class maintains this cache of surfaces, and
+   handles the conversion to a CGGraphicsContext that AppKit can use
+   to draw on.
+
+   The cache is simple: if a free surface is found it is removed from
+   the cache and set as the "current" surface.  Once Emacs is done
+   with drawing to the current surface, the previous surface that was
+   drawn to is added to the cache for reuse, and the current one is
+   set as the last surface.  If no free surfaces are found in the
+   cache then a new one is created.
+
+   When AppKit wants to update the screen, we provide it with the last
+   surface, as that has the most recent data.
+
+   FIXME: It is possible for the cache to grow if Emacs draws faster
+   than the surfaces can be drawn to the screen, so there should
+   probably be some sort of pruning job that removes excess
+   surfaces.  */
+
+
+- (EmacsSurface *) initWithSize: (NSSize)s
+                     ColorSpace: (CGColorSpaceRef)cs
+{
+  NSTRACE ("[EmacsSurface initWithSize:ColorSpace:]");
+
+  cache = [[NSMutableArray arrayWithCapacity:3] retain];
+  size = s;
+  colorSpace = cs;
+
+  return self;
+}
+
+
+- (void) dealloc
+{
+  if (context)
+    CGContextRelease (context);
+
+  if (currentSurface)
+    CFRelease (currentSurface);
+  if (lastSurface)
+    CFRelease (lastSurface);
+
+  for (id object in cache)
+    CFRelease ((IOSurfaceRef)object);
+
+  [cache removeAllObjects];
+
+  [super dealloc];
+}
+
+
+/* Return the size values our cached data is using.  */
+- (NSSize) getSize
+{
+  return size;
+}
+
+
+/* Return a CGContextRef that can be used for drawing to the screen.
+   This must ALWAYS be paired with a call to releaseContext, and the
+   calls cannot be nested.  */
+- (CGContextRef) getContext
+{
+  IOSurfaceRef surface = NULL;
+
+  NSTRACE ("[EmacsSurface getContextWithSize:]");
+  NSTRACE_MSG (@"IOSurface count: %lu", [cache count] + (lastSurface ? 1 : 0));
+
+  for (id object in cache)
+    {
+      if (!IOSurfaceIsInUse ((IOSurfaceRef)object))
+      {
+        surface = (IOSurfaceRef)object;
+        [cache removeObject:object];
+        break;
+      }
+    }
+
+  if (!surface)
+    {
+      int bytesPerRow = IOSurfaceAlignProperty (kIOSurfaceBytesPerRow,
+                                                size.width * 4);
+
+      surface = IOSurfaceCreate
+        ((CFDictionaryRef)@{(id)kIOSurfaceWidth:[NSNumber numberWithInt:size.width],
+            (id)kIOSurfaceHeight:[NSNumber numberWithInt:size.height],
+            (id)kIOSurfaceBytesPerRow:[NSNumber numberWithInt:bytesPerRow],
+            (id)kIOSurfaceBytesPerElement:[NSNumber numberWithInt:4],
+            (id)kIOSurfacePixelFormat:[NSNumber numberWithUnsignedInt:'RGBA']});
+    }
+
+  IOReturn lockStatus = IOSurfaceLock (surface, 0, nil);
+  if (lockStatus != kIOReturnSuccess)
+    NSLog (@"Failed to lock surface: %x", lockStatus);
+
+  [self copyContentsTo:surface];
+
+  currentSurface = surface;
+
+  context = CGBitmapContextCreate (IOSurfaceGetBaseAddress (currentSurface),
+                                   IOSurfaceGetWidth (currentSurface),
+                                   IOSurfaceGetHeight (currentSurface),
+                                   8,
+                                   IOSurfaceGetBytesPerRow (currentSurface),
+                                   colorSpace,
+                                   IOSurfaceGetPixelFormat (currentSurface));
+  return context;
+}
+
+
+/* Releases the CGGraphicsContext and unlocks the associated
+   IOSurface, so it will be sent to VRAM.  */
+- (void) releaseContext
+{
+  NSTRACE ("[EmacsSurface releaseContextAndGetSurface]");
+
+  CGContextRelease (context);
+  context = NULL;
+
+  IOReturn lockStatus = IOSurfaceUnlock (currentSurface, 0, nil);
+  if (lockStatus != kIOReturnSuccess)
+    NSLog (@"Failed to unlock surface: %x", lockStatus);
+
+  /* Put lastSurface back on the end of the cache.  It may not have
+     been displayed on the screen yet, but we probably want the new
+     data and not some stale data anyway.  */
+  if (lastSurface)
+    [cache addObject:(id)lastSurface];
+  lastSurface = currentSurface;
+  currentSurface = NULL;
+}
+
+
+/* Get the IOSurface that we want to draw to the screen.  */
+- (IOSurfaceRef) getSurface
+{
+  /* lastSurface always contains the most up-to-date and complete data.  */
+  return lastSurface;
+}
+
+
+/* Copy the contents of lastSurface to DESTINATION.  This is required
+   every time we want to use an IOSurface as its contents are probably
+   blanks (if it's new), or stale.  */
+- (void) copyContentsTo: (IOSurfaceRef) destination
+{
+  IOReturn lockStatus;
+  void *sourceData, *destinationData;
+  int numBytes = IOSurfaceGetAllocSize (destination);
+
+  NSTRACE ("[EmacsSurface copyContentsTo:]");
+
+  if (! lastSurface)
+    return;
+
+  lockStatus = IOSurfaceLock (lastSurface, kIOSurfaceLockReadOnly, nil);
+  if (lockStatus != kIOReturnSuccess)
+    NSLog (@"Failed to lock source surface: %x", lockStatus);
+
+  sourceData = IOSurfaceGetBaseAddress (lastSurface);
+  destinationData = IOSurfaceGetBaseAddress (destination);
+
+  /* Since every IOSurface should have the exact same settings, a
+     memcpy seems like the fastest way to copy the data from one to
+     the other.  */
+  memcpy (destinationData, sourceData, numBytes);
+
+  lockStatus = IOSurfaceUnlock (lastSurface, kIOSurfaceLockReadOnly, nil);
+  if (lockStatus != kIOReturnSuccess)
+    NSLog (@"Failed to unlock source surface: %x", lockStatus);
+}
+
+
+@end /* EmacsSurface */
+
+
+#endif
 
 
 #ifdef NS_IMPL_GNUSTEP
