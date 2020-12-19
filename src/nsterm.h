@@ -706,7 +706,7 @@ typedef id instancetype;
 + (CGFloat)scrollerWidth;
 @end
 
-
+#ifdef NS_DRAW_TO_BUFFER
 @interface EmacsSurface : NSObject
 {
   NSMutableArray *cache;
@@ -723,6 +723,7 @@ typedef id instancetype;
 - (void) releaseContext;
 - (IOSurfaceRef) getSurface;
 @end
+#endif
 
 
 /* ==========================================================================
