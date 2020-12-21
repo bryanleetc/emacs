@@ -716,7 +716,7 @@ typedef id instancetype;
   IOSurfaceRef lastSurface;
   CGContextRef context;
 }
-- (EmacsSurface *) initWithSize: (NSSize)s ColorSpace: (CGColorSpaceRef)cs;
+- (id) initWithSize: (NSSize)s ColorSpace: (CGColorSpaceRef)cs;
 - (void) dealloc;
 - (NSSize) getSize;
 - (CGContextRef) getContext;
