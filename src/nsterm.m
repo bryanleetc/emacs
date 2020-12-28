@@ -9596,7 +9596,7 @@ not_in_argv (NSString *arg)
             (id)kIOSurfaceHeight:[NSNumber numberWithInt:size.height],
             (id)kIOSurfaceBytesPerRow:[NSNumber numberWithInt:bytesPerRow],
             (id)kIOSurfaceBytesPerElement:[NSNumber numberWithInt:4],
-            (id)kIOSurfacePixelFormat:[NSNumber numberWithUnsignedInt:'RGBA']});
+            (id)kIOSurfacePixelFormat:[NSNumber numberWithUnsignedInt:'BGRA']});
     }
 
   IOReturn lockStatus = IOSurfaceLock (surface, 0, nil);
@@ -9613,7 +9613,8 @@ not_in_argv (NSString *arg)
                                    8,
                                    IOSurfaceGetBytesPerRow (currentSurface),
                                    colorSpace,
-                                   IOSurfaceGetPixelFormat (currentSurface));
+                                   (kCGImageAlphaPremultipliedFirst
+                                    | kCGBitmapByteOrder32Host));
   return context;
 }
 
