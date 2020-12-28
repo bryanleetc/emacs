@@ -3244,6 +3244,13 @@ than the latter (which has two \"holes\" and three
 one-letter-long matches).")
 
 (defun completion-pcm--hilit-commonality (pattern completions)
+  "Tell where and how well PATTERN matches the strings in COMPLETIONS.
+PATTERN is a list of symbols and strings (see
+`completion-pcm--merge-completions').  It is assumed beforehand
+that PATERN matches every string in COMPLETIONS.  This function's
+job is to propertize these strings with faces
+`completions-common-part', `completions-first-difference' and
+with a numeric property `completion-score'."
   (when completions
     (let* ((re (completion-pcm--pattern->regex pattern 'group))
            (point-idx (completion-pcm--pattern-point-idx pattern))
