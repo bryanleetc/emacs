@@ -3255,10 +3255,10 @@ one-letter-long matches).")
          (unless (string-match re str)
            (error "Internal error: %s does not match %s" re str))
          (let* ((pos (if point-idx (match-beginning point-idx) (match-end 0)))
-                (md (match-data))
-                (start (pop md))
-                (end (pop md))
+                (md (cddr (match-data)))
+                (start 0)
                 (len (length str))
+                (end len)
                 ;; To understand how this works, consider these bad
                 ;; ascii(tm) diagrams showing how the pattern "foo"
                 ;; flex-matches "fabrobazo", "fbarbazoo" and
