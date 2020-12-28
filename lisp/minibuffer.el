@@ -3263,9 +3263,9 @@ with a numeric property `completion-score'."
            (error "Internal error: %s does not match %s" re str))
          (let* ((pos (if point-idx (match-beginning point-idx) (match-end 0)))
                 (md (cddr (match-data)))
-                (start 0)
-                (len (length str))
-                (end len)
+                (match-end (cadr (match-data)))
+                (from 0)
+                (end (length str))
                 ;; To understand how this works, consider these bad
                 ;; ascii(tm) diagrams showing how the pattern "foo"
                 ;; flex-matches "fabrobazo", "fbarbazoo" and
@@ -3303,9 +3303,12 @@ with a numeric property `completion-score'."
                 (score-numerator 0)
                 (score-denominator 0)
                 (last-b 0)
-                (update-score
+                (update-score-and-face
                  (lambda (a b)
-                   "Update score variables given match range (A B)."
+                   "Update score and face given match range (A B)."
+                   (add-face-text-property a b
+                                           'completions-common-part
+                                           nil str)
                    (setq
                     score-numerator   (+ score-numerator (- b a)))
                    (unless (or (= a last-b)
@@ -3320,16 +3323,14 @@ with a numeric property `completion-score'."
                    (setq
                     last-b              b))))
            (while md
-             (funcall update-score start (car md))
-             (add-face-text-property
-              start (pop md)
-              'completions-common-part
-              nil str)
-             (setq start (pop md)))
-           (add-face-text-property
-            start end
-            'completions-common-part
-            nil str)
+             (funcall update-score-and-face from (pop md))
+             (setq from (pop md)))
+           ;; If `pattern' doesn't have an explicit trailing any, the
+           ;; regex `re' won't produce a match representing the region
+           ;; after the match.  Thus we need to account to account for
+           ;; that extra bit of match potentially (bug#42149).
+           (unless (= from match-end)
+             (funcall update-score-and-face from match-end))
            (if (> (length str) pos)
                (add-face-text-property
                 pos (1+ pos)
@@ -3338,7 +3339,7 @@ with a numeric property `completion-score'."
            (unless (zerop (length str))
              (put-text-property
               0 1 'completion-score
-              (/ score-numerator (* len (1+ score-denominator)) 1.0) str)))
+              (/ score-numerator (* end (1+ score-denominator)) 1.0) str)))
          str)
        completions))))
 
