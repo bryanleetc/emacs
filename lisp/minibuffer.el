@@ -3319,7 +3319,6 @@ with a numeric property `completion-score'."
                                                     flex-score-match-tightness)))))
                    (setq
                     last-b              b))))
-           (funcall update-score start start)
            (while md
              (funcall update-score start (car md))
              (add-face-text-property
@@ -3327,7 +3326,6 @@ with a numeric property `completion-score'."
               'completions-common-part
               nil str)
              (setq start (pop md)))
-           (funcall update-score len len)
            (add-face-text-property
             start end
             'completions-common-part
